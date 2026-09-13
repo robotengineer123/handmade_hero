@@ -1,10 +1,11 @@
 #include "SDL3/SDL_events.h"
-#include "SDL3/SDL_pixels.h"
+#include "SDL3/SDL_oldnames.h"
 #include "SDL3/SDL_render.h"
 #include "SDL3/SDL_video.h"
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
 
+#include <cassert>
 #include <cstddef>
 #include <cstdint>
 #include <iostream>
@@ -17,54 +18,70 @@ constexpr char kWindowTitle[] = "Handmade Hero";
 constexpr int kWinWidth = 1280;
 constexpr int kWinHeight = 720;
 
-global_var SDL_Texture *texture;
-global_var void *texturePixels;
-global_var int bitmapWidth;
-global_var int bitmapHeight;
+// The texture is SDL_PIXELFORMAT_ARGB8888
+typedef struct {
+  SDL_Texture *texture;
+  void *texturePixels;
+  int width;
+  int height;
+  int pitch;
+} sdl_offscreen_buffer;
 
-void SDLUpdateWindow(SDL_Renderer *renderer) {
-  // SDL_RenderClear(renderer);
-  SDL_RenderTexture(renderer, texture, 0, 0);
+typedef struct {
+  int width;
+  int height;
+} sdl_window_dimensions;
+
+sdl_window_dimensions SDLGetWindowDimensions(SDL_Window *window) {
+  sdl_window_dimensions dims;
+  SDL_GetWindowSizeInPixels(window, &dims.width, &dims.height);
+  return dims;
+}
+
+void SDLUpdateWindow(SDL_Window *window, sdl_offscreen_buffer BackBuffer) {
+  SDL_Renderer *renderer = SDL_GetRenderer(window);
+  if (SDL_UpdateTexture(BackBuffer.texture, 0, BackBuffer.texturePixels,
+                        BackBuffer.pitch)) {
+    // TODO: Handle error
+  };
+  SDL_RenderTexture(renderer, BackBuffer.texture, 0, 0);
   SDL_RenderPresent(renderer);
 }
 
-void resizeTexture(SDL_Renderer *renderer, int width, int height) {
-  if (texture) {
-    SDL_DestroyTexture(texture);
-  }
-  if (texturePixels) {
-    free(texturePixels);
-  }
-
-  texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888,
-                              SDL_TEXTUREACCESS_STREAMING, width, height);
-  int bytesPerPixel = 4;
-  texturePixels = malloc(width * height * bytesPerPixel);
-
-  int pitch = width * bytesPerPixel;
-  uint8_t *row = (uint8_t *)texturePixels;
-  for (int i = 0; i < height; i++) {
-    uint8_t *pixel = (uint8_t *)row;
-    for (int j = 0; j < width; j++) {
-      // Pixel in memory  BB GG RR AA;
-      *pixel = (uint8_t)i; // Blue
-      ++pixel;
-      *pixel = (uint8_t)j; // Green
-      ++pixel;
-      *pixel = 0; // Red
-      ++pixel;
-      *pixel = 255; // Alpha
-      ++pixel;
+void renderWierdGradientPattern(sdl_offscreen_buffer BackBuffer,
+                                int xOffset = 0, int yOffset = 0) {
+  uint8_t *row = (uint8_t *)BackBuffer.texturePixels;
+  for (int i = 0; i < BackBuffer.height; i++) {
+    uint32_t *pixel = (uint32_t *)row;
+    for (int j = 0; j < BackBuffer.width; j++) {
+      uint8_t blue = (j + xOffset);
+      uint8_t green = (i + yOffset);
+      *pixel++ = 0xFF000000 | ((green << 8) | blue);
     }
-    row += pitch;
+    row += BackBuffer.pitch;
+  }
+}
+void resizeTexture(SDL_Renderer *renderer, sdl_offscreen_buffer *BackBuffer,
+                   int width, int height) {
+  if (BackBuffer->texture) {
+    SDL_DestroyTexture(BackBuffer->texture);
+  }
+  if (BackBuffer->texturePixels) {
+    free(BackBuffer->texturePixels);
   }
 
-  if (SDL_UpdateTexture(texture, 0, texturePixels, width * bytesPerPixel)) {
-    // TODO: Handle error
-  };
+  BackBuffer->texture =
+      SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888,
+                        SDL_TEXTUREACCESS_STREAMING, width, height);
+  BackBuffer->width = width;
+  BackBuffer->height = height;
+  BackBuffer->pitch = width * 4;
+  BackBuffer->texturePixels = malloc(BackBuffer->height * BackBuffer->pitch);
 }
 
 void handleEvent(bool &running, const SDL_Event &event) {
+  SDL_Window *window = SDL_GetWindowFromEvent(&event);
+  SDL_Renderer *renderer = SDL_GetRenderer(window);
   switch (event.type) {
   case SDL_EVENT_QUIT: {
     running = false;
@@ -75,23 +92,15 @@ void handleEvent(bool &running, const SDL_Event &event) {
     }
   } break;
   case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED: {
-    int winWidth = event.window.data1;
-    int winHeight = event.window.data2;
   } break;
   case SDL_EVENT_WINDOW_EXPOSED: {
-    SDL_Window *window = SDL_GetWindowFromEvent(&event);
-    int width, height;
-    SDL_Renderer *renderer = SDL_GetRenderer(window);
-    SDL_GetWindowSize(window, &width, &height);
-    resizeTexture(renderer, width, height);
-    SDLUpdateWindow(renderer);
   } break;
   default: {
   } break;
   }
 }
 int main(int argc, char *argv[]) {
-  if (!SDL_Init(SDL_INIT_VIDEO)) {
+  if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) {
     std::cerr << "SDL_Init failed: " << SDL_GetError() << '\n';
     return 1;
   }
@@ -107,18 +116,34 @@ int main(int argc, char *argv[]) {
     return 1;
   }
 
-  bool running = true;
-  int winWidth = kWinWidth;
-  int winHeight = kWinHeight;
+  SDL_Gamepad *controllerHandles[4] = {0};
+  SDL_JoystickID *joystick_ids = SDL_GetJoysticks();
+  for (SDL_JoystickInstanceID current = joystick_ids[0]; current != 0;) {
+  }
 
-  resizeTexture(renderer, winWidth, winHeight);
-  SDLUpdateWindow(renderer);
+  SDL_Free(joystick_ids);
+  sdl_offscreen_buffer BackBuffer = {0};
+  bool running = true;
+  int winWidth;
+  int winHeight;
+
+  SDL_GetWindowSizeInPixels(window, &winWidth, &winHeight);
+  resizeTexture(renderer, &BackBuffer, winWidth, winHeight);
+  SDLUpdateWindow(window, BackBuffer);
+  int xOffset = 0;
+  int yOffset = 0;
   while (running) {
     SDL_Event event;
 
     while (SDL_PollEvent(&event)) {
       handleEvent(running, event);
     }
+    int width, height;
+    SDL_GetWindowSizeInPixels(window, &width, &height);
+    renderWierdGradientPattern(BackBuffer, xOffset, yOffset);
+    SDLUpdateWindow(window, BackBuffer);
+    ++xOffset;
+    ++yOffset;
   }
 
   SDL_DestroyRenderer(renderer);
