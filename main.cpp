@@ -1,4 +1,6 @@
 #include "SDL3/SDL_events.h"
+#include "SDL3/SDL_gamepad.h"
+#include "SDL3/SDL_joystick.h"
 #include "SDL3/SDL_oldnames.h"
 #include "SDL3/SDL_render.h"
 #include "SDL3/SDL_video.h"
@@ -6,7 +8,6 @@
 #include <SDL3/SDL_main.h>
 
 #include <cassert>
-#include <cstddef>
 #include <cstdint>
 #include <iostream>
 
@@ -17,6 +18,7 @@
 constexpr char kWindowTitle[] = "Handmade Hero";
 constexpr int kWinWidth = 1280;
 constexpr int kWinHeight = 720;
+constexpr int kMaxGamePads = 4;
 
 // The texture is SDL_PIXELFORMAT_ARGB8888
 typedef struct {
@@ -99,6 +101,29 @@ void handleEvent(bool &running, const SDL_Event &event) {
   } break;
   }
 }
+
+SDL_Gamepad **initGamepads() {
+  SDL_JoystickID *joystick_ids = SDL_GetJoysticks();
+  static SDL_Gamepad *gamepads[kMaxGamePads] = {0};
+  int gamepadCount = 0;
+  for (SDL_JoystickID *current = joystick_ids; *joystick_ids != 0;
+       joystick_ids++) {
+    if (SDL_IsGamepad(*current)) {
+      gamepads[gamepadCount++] = SDL_OpenGamepad(*current);
+    }
+  }
+  SDL_free(joystick_ids);
+  return gamepads;
+}
+
+void destroyGamepads(SDL_Gamepad **gamepads) {
+  for (int i = 0; i < kMaxGamePads; i++) {
+    if (gamepads[i]) {
+      SDL_CloseGamepad(gamepads[i]);
+    }
+  }
+}
+
 int main(int argc, char *argv[]) {
   if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) {
     std::cerr << "SDL_Init failed: " << SDL_GetError() << '\n';
@@ -116,12 +141,8 @@ int main(int argc, char *argv[]) {
     return 1;
   }
 
-  SDL_Gamepad *controllerHandles[4] = {0};
-  SDL_JoystickID *joystick_ids = SDL_GetJoysticks();
-  for (SDL_JoystickInstanceID current = joystick_ids[0]; current != 0;) {
-  }
+  SDL_Gamepad **gamepads = initGamepads();
 
-  SDL_Free(joystick_ids);
   sdl_offscreen_buffer BackBuffer = {0};
   bool running = true;
   int winWidth;
@@ -134,10 +155,35 @@ int main(int argc, char *argv[]) {
   int yOffset = 0;
   while (running) {
     SDL_Event event;
-
     while (SDL_PollEvent(&event)) {
       handleEvent(running, event);
     }
+
+    for (int controllerId = 0; controllerId < kMaxGamePads; ++controllerId) {
+      if (SDL_GamepadConnected(gamepads[controllerId])) {
+        bool up = SDL_GetGamepadButton(gamepads[controllerId],
+                                       SDL_GAMEPAD_BUTTON_DPAD_UP);
+        bool down = SDL_GetGamepadButton(gamepads[controllerId],
+                                         SDL_GAMEPAD_BUTTON_DPAD_DOWN);
+        bool right = SDL_GetGamepadButton(gamepads[controllerId],
+                                          SDL_GAMEPAD_BUTTON_DPAD_RIGHT);
+        bool left = SDL_GetGamepadButton(gamepads[controllerId],
+                                         SDL_GAMEPAD_BUTTON_DPAD_LEFT);
+        bool start = SDL_GetGamepadButton(gamepads[controllerId],
+                                          SDL_GAMEPAD_BUTTON_START);
+        bool back = SDL_GetGamepadButton(gamepads[controllerId],
+                                         SDL_GAMEPAD_BUTTON_BACK);
+        bool north = SDL_GetGamepadButton(gamepads[controllerId],
+                                          SDL_GAMEPAD_BUTTON_NORTH);
+        bool west = SDL_GetGamepadButton(gamepads[controllerId],
+                                         SDL_GAMEPAD_BUTTON_WEST);
+        bool east = SDL_GetGamepadButton(gamepads[controllerId],
+                                         SDL_GAMEPAD_BUTTON_EAST);
+        bool south = SDL_GetGamepadButton(gamepads[controllerId],
+                                          SDL_GAMEPAD_BUTTON_SOUTH);
+      }
+    }
+
     int width, height;
     SDL_GetWindowSizeInPixels(window, &width, &height);
     renderWierdGradientPattern(BackBuffer, xOffset, yOffset);
@@ -148,6 +194,7 @@ int main(int argc, char *argv[]) {
 
   SDL_DestroyRenderer(renderer);
   SDL_DestroyWindow(window);
+  destroyGamepads(gamepads);
   SDL_Quit();
 
   return 0;
