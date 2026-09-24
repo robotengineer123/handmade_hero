@@ -1,7 +1,9 @@
 #include "SDL3/SDL_events.h"
 #include "SDL3/SDL_gamepad.h"
+#include "SDL3/SDL_haptic.h"
+#include "SDL3/SDL_init.h"
 #include "SDL3/SDL_joystick.h"
-#include "SDL3/SDL_oldnames.h"
+#include "SDL3/SDL_keycode.h"
 #include "SDL3/SDL_render.h"
 #include "SDL3/SDL_video.h"
 #include <SDL3/SDL.h>
@@ -9,6 +11,7 @@
 
 #include <cassert>
 #include <cstdint>
+#include <cstdio>
 #include <iostream>
 
 #define internal static
@@ -88,11 +91,20 @@ void handleEvent(bool &running, const SDL_Event &event) {
   case SDL_EVENT_QUIT: {
     running = false;
   } break;
-  case SDL_EVENT_KEY_DOWN: {
-    if (event.key.key == SDLK_ESCAPE) {
+  case SDL_EVENT_KEY_UP: {
+    if (event.key.key == SDLK_W) {
       running = false;
+    } else if (event.key.key == SDLK_A) {
+    } else if (event.key.key == SDLK_S) {
+    } else if (event.key.key == SDLK_D) {
+    } else if (event.key.key == SDLK_SPACE) {
+    } else if (event.key.key == SDLK_UP) {
+    } else if (event.key.key == SDLK_DOWN) {
+    } else if (event.key.key == SDLK_LEFT) {
+    } else if (event.key.key == SDLK_RIGHT) {
+    } else if (event.key.key == SDLK_ESCAPE) {
     }
-  } break;
+  }
   case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED: {
   } break;
   case SDL_EVENT_WINDOW_EXPOSED: {
@@ -102,30 +114,48 @@ void handleEvent(bool &running, const SDL_Event &event) {
   }
 }
 
-SDL_Gamepad **initGamepads() {
-  SDL_JoystickID *joystick_ids = SDL_GetJoysticks();
-  static SDL_Gamepad *gamepads[kMaxGamePads] = {0};
+typedef struct {
+  SDL_Gamepad *gamepad;
+} Controller;
+
+Controller *initGamepads() {
+  SDL_JoystickID *joystick_ids = SDL_GetJoysticks(nullptr);
+  Controller *controllerArray =
+      (Controller *)malloc(sizeof(Controller) * (kMaxGamePads + 1));
+  Controller *controllers = controllerArray;
+  memset(controllers, 0, (kMaxGamePads + 1) * sizeof(Controller));
   int gamepadCount = 0;
-  for (SDL_JoystickID *current = joystick_ids; *joystick_ids != 0;
-       joystick_ids++) {
-    if (SDL_IsGamepad(*current)) {
-      gamepads[gamepadCount++] = SDL_OpenGamepad(*current);
+  for (SDL_JoystickID *current = joystick_ids; *current != 0; current++) {
+    if (SDL_IsGamepad(*current) && gamepadCount < kMaxGamePads) {
+      controllers->gamepad = SDL_OpenGamepad(*current);
+      controllers++;
+      gamepadCount++;
     }
   }
   SDL_free(joystick_ids);
-  return gamepads;
+  std::cerr << gamepadCount << " number of gamepads initiated /n" << std::endl;
+  return controllerArray;
 }
 
-void destroyGamepads(SDL_Gamepad **gamepads) {
-  for (int i = 0; i < kMaxGamePads; i++) {
-    if (gamepads[i]) {
-      SDL_CloseGamepad(gamepads[i]);
-    }
+void destroyGamepads(Controller *controllers) {
+  for (Controller *controller = controllers; controller->gamepad != NULL;
+       controller++) {
+    SDL_CloseGamepad(controller->gamepad);
+  }
+  free(controllers);
+}
+
+void playHaptic(SDL_Gamepad *gamepad) {
+  if (gamepad == NULL) {
+    return;
+  }
+
+  // Play effect at 50% strength for 2 seconds
+  if (!SDL_RumbleGamepad(gamepad, 0x7FFF, 0x7FFF, 2000)) {
   }
 }
-
 int main(int argc, char *argv[]) {
-  if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) {
+  if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD | SDL_INIT_HAPTIC)) {
     std::cerr << "SDL_Init failed: " << SDL_GetError() << '\n';
     return 1;
   }
@@ -141,7 +171,7 @@ int main(int argc, char *argv[]) {
     return 1;
   }
 
-  SDL_Gamepad **gamepads = initGamepads();
+  Controller *controllers = initGamepads();
 
   sdl_offscreen_buffer BackBuffer = {0};
   bool running = true;
@@ -159,28 +189,43 @@ int main(int argc, char *argv[]) {
       handleEvent(running, event);
     }
 
-    for (int controllerId = 0; controllerId < kMaxGamePads; ++controllerId) {
-      if (SDL_GamepadConnected(gamepads[controllerId])) {
-        bool up = SDL_GetGamepadButton(gamepads[controllerId],
+    for (Controller *controller = controllers; controller->gamepad != NULL;
+         ++controller) {
+      if (SDL_GamepadConnected(controller->gamepad)) {
+        bool up = SDL_GetGamepadButton(controller->gamepad,
                                        SDL_GAMEPAD_BUTTON_DPAD_UP);
-        bool down = SDL_GetGamepadButton(gamepads[controllerId],
+        bool down = SDL_GetGamepadButton(controller->gamepad,
                                          SDL_GAMEPAD_BUTTON_DPAD_DOWN);
-        bool right = SDL_GetGamepadButton(gamepads[controllerId],
+        bool right = SDL_GetGamepadButton(controller->gamepad,
                                           SDL_GAMEPAD_BUTTON_DPAD_RIGHT);
-        bool left = SDL_GetGamepadButton(gamepads[controllerId],
+        bool left = SDL_GetGamepadButton(controller->gamepad,
                                          SDL_GAMEPAD_BUTTON_DPAD_LEFT);
-        bool start = SDL_GetGamepadButton(gamepads[controllerId],
-                                          SDL_GAMEPAD_BUTTON_START);
-        bool back = SDL_GetGamepadButton(gamepads[controllerId],
-                                         SDL_GAMEPAD_BUTTON_BACK);
-        bool north = SDL_GetGamepadButton(gamepads[controllerId],
-                                          SDL_GAMEPAD_BUTTON_NORTH);
-        bool west = SDL_GetGamepadButton(gamepads[controllerId],
-                                         SDL_GAMEPAD_BUTTON_WEST);
-        bool east = SDL_GetGamepadButton(gamepads[controllerId],
-                                         SDL_GAMEPAD_BUTTON_EAST);
-        bool south = SDL_GetGamepadButton(gamepads[controllerId],
-                                          SDL_GAMEPAD_BUTTON_SOUTH);
+        bool start =
+            SDL_GetGamepadButton(controller->gamepad, SDL_GAMEPAD_BUTTON_START);
+        bool back =
+            SDL_GetGamepadButton(controller->gamepad, SDL_GAMEPAD_BUTTON_BACK);
+        bool north =
+            SDL_GetGamepadButton(controller->gamepad, SDL_GAMEPAD_BUTTON_NORTH);
+        bool west =
+            SDL_GetGamepadButton(controller->gamepad, SDL_GAMEPAD_BUTTON_WEST);
+        bool east =
+            SDL_GetGamepadButton(controller->gamepad, SDL_GAMEPAD_BUTTON_EAST);
+        bool south =
+            SDL_GetGamepadButton(controller->gamepad, SDL_GAMEPAD_BUTTON_SOUTH);
+
+        int16_t axisX =
+            SDL_GetGamepadAxis(controller->gamepad, SDL_GAMEPAD_AXIS_LEFTX);
+
+        int16_t axisY =
+            SDL_GetGamepadAxis(controller->gamepad, SDL_GAMEPAD_AXIS_LEFTY);
+
+        if (south) {
+          xOffset += 2;
+        }
+        if (north) {
+
+          playHaptic(controller->gamepad);
+        }
       }
     }
 
@@ -188,13 +233,11 @@ int main(int argc, char *argv[]) {
     SDL_GetWindowSizeInPixels(window, &width, &height);
     renderWierdGradientPattern(BackBuffer, xOffset, yOffset);
     SDLUpdateWindow(window, BackBuffer);
-    ++xOffset;
-    ++yOffset;
   }
 
   SDL_DestroyRenderer(renderer);
   SDL_DestroyWindow(window);
-  destroyGamepads(gamepads);
+  destroyGamepads(controllers);
   SDL_Quit();
 
   return 0;
