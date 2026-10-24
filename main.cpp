@@ -1,3 +1,5 @@
+#include "SDL3/SDL_audio.h"
+#include "SDL3/SDL_error.h"
 #include "SDL3/SDL_events.h"
 #include "SDL3/SDL_gamepad.h"
 #include "SDL3/SDL_haptic.h"
@@ -9,6 +11,7 @@
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
 
+#include <arm_neon.h>
 #include <cassert>
 #include <cstdint>
 #include <cstdio>
@@ -137,6 +140,67 @@ Controller *initGamepads() {
   return controllerArray;
 }
 
+/* this function will be called (usually in a background thread) when the audio
+ * stream is consuming data. */
+static void FeedTheAudioStreamMore(SDL_AudioStream *astream) {
+  /* total_amount is how much data the audio stream is eating right now,
+     additional_amount is how much more it needs than what it currently has
+     queued (which might be zero!). You can supply any amount of data here; it
+     will take what it needs and use the extra later. If you don't give it
+     enough, it will take everything and then feed silence to the hardware for
+     the rest. Ideally, though, we always give it what it needs and no extra, so
+     we aren't buffering more than necessary. */
+  int sample_size = sizeof(float32_t);
+  SDL_AudioSpec spec;
+  SDL_GetAudioStreamFormat(astream, &spec, NULL);
+  static int target_frames_q = spec.freq / 20; // 50 ms buffer;
+  static int target_bytes_q = target_frames_q * spec.channels * sample_size;
+
+  int queued_bytes = SDL_GetAudioStreamQueued(astream);
+
+  int bytes_to_put = target_bytes_q - queued_bytes;
+  const int bytesPerFrame = sample_size * spec.channels;
+  int frames_to_put = bytes_to_put / bytesPerFrame;
+
+  /* generate a 440Hz pure tone */
+  float32_t samples[8192 * 2];
+  static int current_sine_frame = 0;
+  for (int frame = 0; frame < frames_to_put; frame++) {
+    const float freq = 440.0f;
+    const float phase = current_sine_frame * freq / spec.freq;
+    const float sample = SDL_sinf(phase * 2 * SDL_PI_F);
+    for (int channel = 0; channel < spec.channels; channel++) {
+      samples[frame * spec.channels + channel] = sample;
+    }
+    current_sine_frame++;
+  }
+
+  /* wrapping around to avoid floating-point errors */
+  current_sine_frame %= spec.freq;
+
+  /* feed the new data to the stream. It will queue at the end, and trickle
+   * out as the hardware needs more data. */
+  SDL_PutAudioStreamData(astream, samples, frames_to_put * bytesPerFrame);
+}
+
+SDL_AudioStream *initAudioStream() {
+  SDL_AudioSpec spec;
+  spec.channels = 2;
+  spec.format = SDL_AUDIO_F32;
+  spec.freq = 48000;
+  SDL_AudioStream *stream = SDL_OpenAudioDeviceStream(
+      SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, NULL, NULL);
+  if (!stream) {
+    std::cerr << "Audio stream creation failed: " << SDL_GetError() << '/n';
+    return NULL;
+  }
+  SDL_ResumeAudioStreamDevice(stream);
+  return stream;
+}
+
+void destoryAudioStream(SDL_AudioStream *stream) {
+  SDL_DestroyAudioStream(stream);
+}
 void destroyGamepads(Controller *controllers) {
   for (Controller *controller = controllers; controller->gamepad != NULL;
        controller++) {
@@ -155,7 +219,8 @@ void playHaptic(SDL_Gamepad *gamepad) {
   }
 }
 int main(int argc, char *argv[]) {
-  if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD | SDL_INIT_HAPTIC)) {
+  if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD | SDL_INIT_HAPTIC |
+                SDL_INIT_AUDIO)) {
     std::cerr << "SDL_Init failed: " << SDL_GetError() << '\n';
     return 1;
   }
@@ -181,6 +246,7 @@ int main(int argc, char *argv[]) {
   SDL_GetWindowSizeInPixels(window, &winWidth, &winHeight);
   resizeTexture(renderer, &BackBuffer, winWidth, winHeight);
   SDLUpdateWindow(window, BackBuffer);
+  SDL_AudioStream *astream = initAudioStream();
   int xOffset = 0;
   int yOffset = 0;
   while (running) {
@@ -233,11 +299,13 @@ int main(int argc, char *argv[]) {
     SDL_GetWindowSizeInPixels(window, &width, &height);
     renderWierdGradientPattern(BackBuffer, xOffset, yOffset);
     SDLUpdateWindow(window, BackBuffer);
+    FeedTheAudioStreamMore(astream);
   }
 
   SDL_DestroyRenderer(renderer);
   SDL_DestroyWindow(window);
   destroyGamepads(controllers);
+  destoryAudioStream(astream);
   SDL_Quit();
 
   return 0;
